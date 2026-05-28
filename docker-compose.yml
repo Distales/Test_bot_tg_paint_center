@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  telegram-bot:
+    build: .
+    container_name: centr-krasok-bot
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data:ro  # Mount data directory as read-only
+      - ./logs:/app/logs     # Mount logs directory (if needed)
+    restart: unless-stopped
+    # Uncomment the following lines if you want to limit resources
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: "0.5"
+    #       memory: 512M
+    # Uncomment the following lines if you want to expose ports for health checks
+    # ports:
+    #   - "8000:8000"
+    #   command: ["python", "-m", "app.main"]  # Default command from Dockerfile
