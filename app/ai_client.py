@@ -2,7 +2,7 @@ import logging
 import requests
 import json
 from typing import List, Dict, Optional
-from .config import GROK_API_KEY, GROK_MODEL
+from .config import GEMINI_API_KEY, GEMINI_MODEL
 from .prompts import SYSTEM_PROMPT
 
 # Настраиваем логгирование, чтобы видеть, что происходит в боте (полезно для отладки)
@@ -16,7 +16,7 @@ def get_ai_response(
     temperature: float = 0.2
 ) -> str:
     """
-    Получает ответ от Grok API (xAI) на основе сообщения пользователя, базы знаний и истории диалога.
+    Получает ответ от Gemini API (Google) на основе сообщения пользователя, базы знаний и истории диалога.
     
     Args:
         user_message (str): Вопрос/сообщение пользователя
@@ -29,63 +29,85 @@ def get_ai_response(
         str: Ответ, сгенерированный AI
     """
     try:
-        # Формируем сообщения для отправки в Grok API
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-        ]
+        # Формируем системную инструкцию, объединяя системный промпт и базу знаний
+        system_instruction = {
+            "parts": [{
+                "text": f"{SYSTEM_PROMPT}\n\nБаза знаний о компании:\n\n{knowledge_base}"
+            }]
+        }
         
-        # Добавляем базу знаний как отдельное системное сообщение
-        messages.append({
-            "role": "system", 
-            "content": f"База знаний о компании:\n\n{knowledge_base}"
-        })
+        # Формируем список contenов для Gemini API
+        contents = []
         
         # Если есть история диалога, добавляем её
         if conversation_history:
             for msg in conversation_history:
-                messages.append({"role": msg["role"], "content": msg["content"]})
+                # Преобразуем роли: assistant -> model, user остается user
+                role = msg["role"]
+                if role == "assistant":
+                    role = "model"
+                contents.append({
+                    "role": role,
+                    "parts": [{"text": msg["content"]}]
+                })
         
         # Добавляем текущее сообщение пользователя
-        messages.append({"role": "user", "content": user_message})
+        contents.append({
+            "role": "user",
+            "parts": [{"text": user_message}]
+        })
         
-        # Grok API endpoint (xAI)
-        api_url = "https://api.x.ai/v1/chat/completions"
+        # Gemini API endpoint
+        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
         headers = {
-            "Authorization": f"Bearer {GROK_API_KEY}",
+            "x-goog-api-key": GEMINI_API_KEY,
             "Content-Type": "application/json"
         }
         
         payload = {
-            "model": GROK_MODEL,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "stream": False
+            "systemInstruction": system_instruction,
+            "contents": contents,
+            "generationConfig": {
+                "temperature": temperature,
+                "maxOutputTokens": max_tokens,
+                "topP": 0.8,
+                "topK": 40
+            }
         }
         
         # Выполняем запрос
         response = requests.post(api_url, headers=headers, data=json.dumps(payload), timeout=30)
         
         if response.status_code != 200:
-            logger.error(f"Grok API error: {response.status_code} - {response.text}")
+            logger.error(f"Gemini API error: {response.status_code} - {response.text}")
             return "Произошла ошибка при обращении к AI API. Пожалуйста, попробуйте позже."
         
         # Парсим ответ
         result = response.json()
         # Извлекаем текст ответа
-        if "choices" in result and len(result["choices"]) > 0:
-            ai_response = result["choices"][0].get("message", {}).get("content", "").strip()
+        if "candidates" in result and len(result["candidates"]) > 0:
+            candidate = result["candidates"][0]
+            if "content" in candidate and "parts" in candidate["content"]:
+                parts = candidate["content"]["parts"]
+                if parts and "text" in parts[0]:
+                    ai_response = parts[0]["text"].strip()
+                else:
+                    ai_response = ""
+            else:
+                ai_response = ""
         else:
-            # Если формат неожиданный, пытаемся получить текст иначе
-            ai_response = result.get("content", "").strip()
-            if not ai_response:
-                ai_response = json.dumps(result, ensure_ascii=False)
+            ai_response = ""
         
-        logger.info(f"Получен ответ от Grok на сообщение: {user_message[:50]}...")
+        if not ai_response:
+            # Если формат неожиданный, возвращаем пустой ответ или логгируем
+            logger.warning(f"Unexpected Gemini API response format: {result}")
+            ai_response = "Извините, не удалось получить ответ от AI."
+        
+        logger.info(f"Получен ответ от Gemini на сообщение: {user_message[:50]}...")
         return ai_response
         
     except requests.exceptions.RequestException as e:
-        logger.error(f"Ошибка сети при обращении к Grok API: {str(e)}")
+        logger.error(f"Ошибка сети при обращении к Gemini API: {str(e)}")
         return "Произошла ошибка сети при обработке вашего запроса. Пожалуйста, попробуйте позже."
     except Exception as e:
         logger.error(f"Непредвиденная ошибка в AI client: {str(e)}")
